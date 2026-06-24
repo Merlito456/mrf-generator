@@ -1,69 +1,52 @@
 import streamlit as st
 import pandas as pd
 import io
-import os
 from openpyxl import load_workbook
 from datetime import date
-
-# --- CONFIGURATION ---
-DB_FILE = "eul_material_list.csv"
-TEMPLATE_FILE = "template_mrf.xlsx"
 
 st.set_page_config(page_title="MRF Generator", layout="wide")
 st.title("🏗️ Automated MRF Generator")
 
-# --- DATA LOADING ---
+# 1. Load Data with header=1 to handle your CSV structure
 @st.cache_data
-def load_db():
-    try:
-        # We skip potential bad lines and force the engine to handle uneven columns
-        return pd.read_csv(
-            DB_FILE, 
-            encoding='latin1', 
-            engine='python', 
-            on_bad_lines='skip'
-        ).set_index('PLAID')
-    except Exception as e:
-        st.error(f"Error loading database: {e}")
-        return None
+def load_data():
+    # Load Material List (using header=1 because your headers are in the 2nd row)
+    mat_df = pd.read_csv("eul_material_list.csv", header=1, encoding='latin1')
+    # Rename the first column (Site ID) to 'PLAID' for easier lookup
+    mat_df = mat_df.rename(columns={mat_df.columns[0]: 'PLAID'})
+    
+    # Load Masterlist to get Site Names
+    master_df = pd.read_csv("GLOBE SITE MASTERLIST.csv", encoding='latin1')
+    
+    # Merge them so we have PLAID and Site Name together
+    df = pd.merge(mat_df, master_df[['PLAID', 'SITE']], on='PLAID', how='left')
+    return df.set_index('PLAID')
 
-material_db = load_db()
+material_db = load_data()
 
-# --- APP INTERFACE ---
-if material_db is not None:
-    st.sidebar.header("Site Selection")
-    # Clean the index to remove potential whitespace
-    plaid_list = [str(i).strip() for i in material_db.index.tolist()]
-    selected_plaid = st.sidebar.selectbox("Select PLAID", plaid_list)
-    site_name = st.sidebar.text_input("Enter Site Name for Output")
+# 2. Site Selection
+selected_plaid = st.sidebar.selectbox("Select PLAID", material_db.index.tolist())
+# Fetch site name automatically from our merged database
+site_name = material_db.loc[selected_plaid, 'SITE']
+st.sidebar.write(f"**Selected Site:** {site_name}")
 
-    if st.button("Generate MRF"):
-        try:
-            site_row = material_db.loc[selected_plaid]
-            wb = load_workbook(TEMPLATE_FILE)
-            ws = wb.active
-            
-            # Update Metadata
-            ws['D8'] = f"{selected_plaid} - {site_name}"
-            ws['E4'] = date.today().strftime("%Y-%m-%d")
-            
-            # --- AUTOMATED MAPPING ---
-            # Part Numbers are in Column A (1), Quantities in Column D (4)
-            for row in range(16, 60):
-                part_no = str(ws[f'A{row}'].value).strip()
-                
-                # If part_no found in CSV database columns, update quantity
-                if part_no in material_db.columns:
-                    val = site_row[part_no]
-                    ws[f'D{row}'] = val
-            
-            # Save to buffer
-            output = io.BytesIO()
-            wb.save(output)
-            
-            new_filename = TEMPLATE_FILE.replace("PLAID-SITE NAME", f"{selected_plaid}-{site_name}")
-            st.success(f"MRF generated for {selected_plaid}!")
-            st.download_button("📥 Download MRF File", data=output.getvalue(), file_name=new_filename)
-            
-        except Exception as e:
-            st.error(f"Processing error: {e}")
+if st.button("Generate MRF"):
+    site_row = material_db.loc[selected_plaid]
+    wb = load_workbook("template_mrf.xlsx")
+    ws = wb.active
+    
+    # Fill Metadata
+    ws['D8'] = f"{selected_plaid} - {site_name}"
+    ws['E4'] = date.today().strftime("%Y-%m-%d")
+    
+    # Map Quantities
+    for row in range(16, 60):
+        part_no = str(ws[f'A{row}'].value).strip()
+        if part_no in material_db.columns:
+            ws[f'D{row}'] = site_row[part_no]
+    
+    output = io.BytesIO()
+    wb.save(output)
+    
+    new_filename = f"MRF_{selected_plaid}_{site_name}.xlsx"
+    st.download_button("📥 Download MRF", data=output.getvalue(), file_name=new_filename)
