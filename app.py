@@ -34,21 +34,22 @@ if st.button("Generate MRF"):
     wb = load_workbook("template_mrf.xlsx")
     ws = wb.active
     
-    # 1. Replace Text Placeholders
+# 1. Replace Text Placeholders
     replacements = {
         "[CITY]": destination_city,
         "[PLAID  - SITE NAME]": f"{selected_plaid} - {site_info['SITE']}",
         "[SITE_ADD]": mod_site_add,
         "[RECEIVED BY]": received_by,
-        "[DATE_GENERATED]": date.today().strftime("%Y-%m-%d")
+        "[DATE_GENERATED]": date.today().strftime("%Y-%m-%d"),
+        "[ESIG]": "" # We clear the tag here so it doesn't leave stray brackets
     }
     
-    # Iterate to replace text tags
     for row in ws.iter_rows():
         for cell in row:
             if cell.value and isinstance(cell.value, str):
                 for placeholder, value in replacements.items():
                     if placeholder in cell.value:
+                        # This replaces ONLY the tag, not the whole cell text
                         cell.value = cell.value.replace(placeholder, value)
 
     # 2. Map Quantities (Rows 16-60, Column A to D)
@@ -61,7 +62,6 @@ if st.button("Generate MRF"):
                 ws[f'D{row}'] = val
 
     # 3. Inject Signature Image (Targeting D47 to avoid Merge Errors)
-# 3. Inject Signature Image (Robust Version for Merged Cells)
     if uploaded_file:
         try:
             target_cell = 'D47'
