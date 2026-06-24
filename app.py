@@ -61,18 +61,28 @@ if st.button("Generate MRF"):
                 ws[f'D{row}'] = val
 
     # 3. Inject Signature Image (Targeting D47 to avoid Merge Errors)
+# 3. Inject Signature Image (Robust Version for Merged Cells)
     if uploaded_file:
         try:
-            # Clear placeholder first
-            ws['D47'] = ""
+            target_cell = 'D47'
+            
+            # Check if D47 is part of a merge
+            for merged_range in ws.merged_cells.ranges:
+                if 'D47' in merged_range:
+                    # Use the top-left cell of the merge as the target
+                    target_cell = merged_range.start_cell.coordinate
+                    break
+            
+            # Clear text in the top-left cell
+            ws[target_cell] = ""
             
             img = ExcelImage(uploaded_file)
             img.width = 120
             img.height = 60
-            ws.add_image(img, 'D47')
+            ws.add_image(img, target_cell)
+            
         except Exception as e:
             st.error(f"Error placing signature: {e}")
-
     # Save and Trigger Download
     output = io.BytesIO()
     wb.save(output)
