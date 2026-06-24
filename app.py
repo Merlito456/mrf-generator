@@ -53,9 +53,9 @@ if st.button("Generate MRF"):
                         cell.value = cell.value.replace(placeholder, value)
             
             # Find [ESIG] coordinate for image injection
-            if cell.value == "[ESIG]":
+            if cell.value and "[ESIG]" in str(cell.value):
                 esig_coord = cell.coordinate
-                cell.value = "" # Clear placeholder text
+                cell.value = "" 
 
     # 2. Map Quantities (Rows 16-60, Column A to D)
     for row in range(16, 60):
@@ -66,17 +66,23 @@ if st.button("Generate MRF"):
             if pd.notna(val) and str(val).strip() != '':
                 ws[f'D{row}'] = val
 
-    # 3. Inject Signature Image
-    if uploaded_file and esig_coord:
-        img = ExcelImage(uploaded_file)
-        img.width = 120
-        img.height = 60
-        ws.add_image(img, esig_coord)
-    elif uploaded_file and not esig_coord:
-        st.error("Placeholder [ESIG] not found in template! Signature could not be placed.")
+    # 3. Inject Signature Image (with D47 fallback)
+    if uploaded_file:
+        try:
+            img = ExcelImage(uploaded_file)
+            img.width = 120
+            img.height = 60
+            # Use found coordinate, or fallback to D47 if not found
+            target_cell = esig_coord if esig_coord else 'D47'
+            ws.add_image(img, target_cell)
+            # Ensure placeholder is cleared even if coordinate was fallback
+            ws['D47'] = ""
+        except Exception as e:
+            st.error(f"Error placing signature: {e}")
 
     # Save and Trigger Download
     output = io.BytesIO()
     wb.save(output)
+    filename = f"NOKIA-FN_06232026-001_{selected_plaid}-{site_info['SITE']}_MF2_SUBCON.xlsx"
     st.success("MRF Generated!")
-    st.download_button("📥 Download Final MRF", data=output.getvalue(), file_name=f"MRF_{selected_plaid}.xlsx")
+    st.download_button("📥 Download Final MRF", data=output.getvalue(), file_name=filename)
