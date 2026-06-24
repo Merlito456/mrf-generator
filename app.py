@@ -52,15 +52,34 @@ if st.button("Generate MRF"):
                         # This replaces ONLY the tag, not the whole cell text
                         cell.value = cell.value.replace(placeholder, value)
 
-    # 2. Map Quantities (Rows 16-60, Column A to D)
-    for row in range(16, 60):
+# 2. Map Quantities & Add Missing Items
+    current_row = 16
+    processed_parts = []
+    
+    # First: Update existing parts in rows 16-60
+    for row in range(16, 61):
         part_cell = ws[f'A{row}']
         part_no = str(part_cell.value).strip() if part_cell.value else ""
+        
         if part_no in material_db.columns:
             val = site_info[part_no]
-            if pd.notna(val) and str(val).strip() != '':
+            # Only write if there is a value; otherwise, leave blank
+            if pd.notna(val) and str(val).strip() != '' and str(val) != '0':
                 ws[f'D{row}'] = val
+            else:
+                ws[f'D{row}'] = "" # Explicitly clear if no requirement
+            processed_parts.append(part_no)
+        
+        if row > current_row: current_row = row
 
+    # Second: Add missing items that are in DB but not in template
+    for part_col in material_db.columns:
+        if part_col not in processed_parts and part_col not in ['SITE', 'SITE_ADD']:
+            val = site_info[part_col]
+            if pd.notna(val) and str(val).strip() != '' and str(val) != '0':
+                current_row += 1
+                ws[f'A{current_row}'] = part_col # Part Number
+                ws[f'D{current_row}'] = val      # Quantity
     # 3. Inject Signature Image (Targeting D47 to avoid Merge Errors)
     if uploaded_file:
         try:
