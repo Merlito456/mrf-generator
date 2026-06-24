@@ -43,19 +43,13 @@ if st.button("Generate MRF"):
         "[DATE_GENERATED]": date.today().strftime("%Y-%m-%d")
     }
     
-    esig_coord = None
+    # Iterate to replace text tags
     for row in ws.iter_rows():
         for cell in row:
-            # Handle text placeholders
             if cell.value and isinstance(cell.value, str):
                 for placeholder, value in replacements.items():
                     if placeholder in cell.value:
                         cell.value = cell.value.replace(placeholder, value)
-            
-            # Find [ESIG] coordinate for image injection
-            if cell.value and "[ESIG]" in str(cell.value):
-                esig_coord = cell.coordinate
-                cell.value = "" 
 
     # 2. Map Quantities (Rows 16-60, Column A to D)
     for row in range(16, 60):
@@ -66,17 +60,16 @@ if st.button("Generate MRF"):
             if pd.notna(val) and str(val).strip() != '':
                 ws[f'D{row}'] = val
 
-    # 3. Inject Signature Image (with D47 fallback)
+    # 3. Inject Signature Image (Targeting D47 to avoid Merge Errors)
     if uploaded_file:
         try:
+            # Clear placeholder first
+            ws['D47'] = ""
+            
             img = ExcelImage(uploaded_file)
             img.width = 120
             img.height = 60
-            # Use found coordinate, or fallback to D47 if not found
-            target_cell = esig_coord if esig_coord else 'D47'
-            ws.add_image(img, target_cell)
-            # Ensure placeholder is cleared even if coordinate was fallback
-            ws['D47'] = ""
+            ws.add_image(img, 'D47')
         except Exception as e:
             st.error(f"Error placing signature: {e}")
 
