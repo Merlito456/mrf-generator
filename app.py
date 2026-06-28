@@ -5,6 +5,7 @@ from openpyxl import load_workbook
 from openpyxl.drawing.image import Image as ExcelImage
 from datetime import date
 import os
+import re
 
 st.set_page_config(page_title="MRF Generator", layout="wide")
 st.title("🏗️ Automated MRF Generator with Parts Selection")
@@ -87,6 +88,10 @@ def load_parts_database():
             # Fill any missing categories with 'General'
             parts_df['Category'] = parts_df['Category'].fillna('General')
             
+            # Clean up description - remove any extra text like "Unnamed:"
+            parts_df['Part_Name'] = parts_df['Part_Name'].astype(str)
+            parts_df['Part_Name'] = parts_df['Part_Name'].apply(lambda x: re.sub(r'^Unnamed:\s*\d+\s*', '', x))
+            
             return parts_df
         else:
             st.warning("PartsDatabase.xlsx not found. Please ensure it exists in the current directory.")
@@ -159,6 +164,24 @@ def safe_set_cell_value(ws, cell_address, value):
         except:
             # If all fails, just pass
             pass
+
+# Helper function to find the correct row for a part number
+def find_part_row(ws, part_num, start_row=16, end_row=60):
+    """Find the row where a part number exists in column A"""
+    for row in range(start_row, end_row + 1):
+        cell_value = ws[f'A{row}'].value
+        if cell_value and str(cell_value).strip() == part_num:
+            return row
+    return None
+
+# Helper function to add a new part row
+def add_part_row(ws, current_row, part_num, qty, description=None):
+    """Add a new part to the MRF"""
+    safe_set_cell_value(ws, f'A{current_row}', part_num)
+    safe_set_cell_value(ws, f'D{current_row}', qty)
+    if description:
+        safe_set_cell_value(ws, f'B{current_row}', description)
+    return current_row + 1
 
 # --- MAIN APPLICATION ---
 # Load all data
@@ -620,6 +643,8 @@ if generate_button:
                 # Clear existing quantities in rows 16-60 (using safe function)
                 for row in range(16, 61):
                     safe_set_cell_value(ws, f'D{row}', "")
+                    # Also clear description column B for rows that might have leftover data
+                    safe_set_cell_value(ws, f'B{row}', "")
                 
                 # Add selected parts (both from database and custom)
                 for part_num, qty in st.session_state.selected_parts.items():
@@ -627,25 +652,27 @@ if generate_button:
                         # Ensure qty is integer and within range
                         qty = safe_int_convert(qty, 0, 9999)
                         
-                        # Check if part exists in template (rows 16-60)
-                        found = False
-                        for row in range(16, 61):
-                            part_cell = ws[f'A{row}']
-                            if part_cell.value and str(part_cell.value).strip() == part_num:
-                                safe_set_cell_value(ws, f'D{row}', qty)
-                                found = True
-                                break
+                        # Get description if available
+                        description = ""
+                        if 'custom_descriptions' in st.session_state and part_num in st.session_state.custom_descriptions:
+                            description = st.session_state.custom_descriptions[part_num].get('description', '')
+                        elif not parts_db.empty:
+                            part_row = parts_db[parts_db['Part_Number'] == part_num]
+                            if not part_row.empty:
+                                description = part_row.iloc[0].get('Part_Name', '')
                         
-                        # If not found, add to new row
-                        if not found:
-                            current_row += 1
-                            safe_set_cell_value(ws, f'A{current_row}', part_num)
-                            safe_set_cell_value(ws, f'D{current_row}', qty)
-                            
-                            # Add description if available (custom)
-                            if 'custom_descriptions' in st.session_state and part_num in st.session_state.custom_descriptions:
-                                # If there's a column for description in template
-                                safe_set_cell_value(ws, f'B{current_row}', st.session_state.custom_descriptions[part_num].get('description', ''))
+                        # Check if part exists in template (rows 16-60)
+                        found_row = find_part_row(ws, part_num, 16, 60)
+                        
+                        if found_row:
+                            # Update existing row
+                            safe_set_cell_value(ws, f'D{found_row}', qty)
+                            # Update description if it was empty or custom
+                            if description:
+                                safe_set_cell_value(ws, f'B{found_row}', description)
+                        else:
+                            # Add new row
+                            current_row = add_part_row(ws, current_row, part_num, qty, description)
                 
                 # 3. Add Additional Parts from Material DB (not selected manually)
                 if selected_plaid in material_db.index:
@@ -653,9 +680,14 @@ if generate_button:
                         if col not in ['SITE', 'SITE_ADD'] and col not in st.session_state.selected_parts:
                             val = material_db.loc[selected_plaid, col]
                             if pd.notna(val) and str(val).strip() != '' and str(val) != '0':
-                                current_row += 1
-                                safe_set_cell_value(ws, f'A{current_row}', col)
-                                safe_set_cell_value(ws, f'D{current_row}', safe_int_convert(val, 0, 9999))
+                                # Check if this part already exists in the template
+                                found_row = find_part_row(ws, col, 16, 60)
+                                qty = safe_int_convert(val, 0, 9999)
+                                
+                                if found_row:
+                                    safe_set_cell_value(ws, f'D{found_row}', qty)
+                                else:
+                                    current_row = add_part_row(ws, current_row, col, qty)
                 
                 # 4. Inject Signature Image
                 if uploaded_file:
