@@ -110,20 +110,26 @@ def load_site_masterlist():
         st.error(f"Error loading site masterlist: {e}")
         return pd.DataFrame()
 
-# Helper function to safely convert to int
-def safe_int_convert(value):
-    """Safely convert value to int, return 0 if conversion fails"""
+# Helper function to safely convert to int and clamp to range
+def safe_int_convert(value, min_val=0, max_val=9999):
+    """Safely convert value to int and clamp to range, return 0 if conversion fails"""
     try:
         if pd.isna(value):
             return 0
         if isinstance(value, (int, float)):
-            return int(value)
-        if isinstance(value, str):
+            result = int(value)
+        elif isinstance(value, str):
             # Remove any non-numeric characters except decimal point
             cleaned = ''.join(c for c in value if c.isdigit() or c == '.')
             if cleaned:
-                return int(float(cleaned))
-        return 0
+                result = int(float(cleaned))
+            else:
+                result = 0
+        else:
+            result = 0
+        
+        # Clamp to range
+        return max(min_val, min(result, max_val))
     except:
         return 0
 
@@ -315,8 +321,8 @@ with tab1:
                     if part_num in st.session_state.selected_parts:
                         default_qty = st.session_state.selected_parts[part_num]
                     
-                    # Ensure default_qty is an integer
-                    default_qty = safe_int_convert(default_qty)
+                    # Ensure default_qty is an integer and within range (0-9999)
+                    default_qty = safe_int_convert(default_qty, 0, 9999)
                     
                     qty = st.number_input(
                         f"qty_{part_num}",
@@ -424,6 +430,9 @@ with tab2:
                                 category = 'Custom'
                                 unit = parts[3] if len(parts) > 3 else 'pcs'
                             
+                            # Ensure qty is within range
+                            qty = safe_int_convert(qty, 1, 9999)
+                            
                             if part_num and desc and qty > 0:
                                 st.session_state.selected_parts[part_num] = qty
                                 if 'custom_descriptions' not in st.session_state:
@@ -451,6 +460,9 @@ if st.session_state.selected_parts:
     summary_data = []
     
     for part_num, qty in st.session_state.selected_parts.items():
+        # Ensure qty is within range
+        qty = safe_int_convert(qty, 0, 9999)
+        
         # Check if it's from database
         if not parts_db.empty:
             part_row = parts_db[parts_db['Part_Number'] == part_num]
@@ -585,8 +597,8 @@ if generate_button:
                 # Add selected parts (both from database and custom)
                 for part_num, qty in st.session_state.selected_parts.items():
                     if qty > 0:
-                        # Ensure qty is integer
-                        qty = safe_int_convert(qty)
+                        # Ensure qty is integer and within range
+                        qty = safe_int_convert(qty, 0, 9999)
                         
                         # Check if part exists in template (rows 16-60)
                         found = False
@@ -618,7 +630,7 @@ if generate_button:
                             if pd.notna(val) and str(val).strip() != '' and str(val) != '0':
                                 current_row += 1
                                 ws[f'A{current_row}'] = col
-                                ws[f'D{current_row}'] = safe_int_convert(val)
+                                ws[f'D{current_row}'] = safe_int_convert(val, 0, 9999)
                 
                 # 4. Inject Signature Image
                 if uploaded_file:
