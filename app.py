@@ -133,6 +133,33 @@ def safe_int_convert(value, min_val=0, max_val=9999):
     except:
         return 0
 
+# Helper function to safely set cell value (handling merged cells)
+def safe_set_cell_value(ws, cell_address, value):
+    """Safely set cell value, handling merged cells by setting the top-left cell"""
+    try:
+        cell = ws[cell_address]
+        
+        # Check if cell is part of a merged range
+        for merged_range in ws.merged_cells.ranges:
+            if cell_address in merged_range:
+                # Use the top-left cell of the merge
+                top_left = merged_range.start_cell
+                top_left.value = value
+                return
+        
+        # Not merged, set directly
+        cell.value = value
+    except Exception as e:
+        # If direct assignment fails, try to set the cell's value using the cell object
+        try:
+            # Get the cell and set its value
+            cell = ws[cell_address]
+            if hasattr(cell, 'value'):
+                cell.value = value
+        except:
+            # If all fails, just pass
+            pass
+
 # --- MAIN APPLICATION ---
 # Load all data
 material_db = load_material_data()
@@ -590,9 +617,9 @@ if generate_button:
                 # 2. Update Parts Quantities
                 current_row = 16
                 
-                # Clear existing quantities in rows 16-60
+                # Clear existing quantities in rows 16-60 (using safe function)
                 for row in range(16, 61):
-                    ws[f'D{row}'] = ""
+                    safe_set_cell_value(ws, f'D{row}', "")
                 
                 # Add selected parts (both from database and custom)
                 for part_num, qty in st.session_state.selected_parts.items():
@@ -605,22 +632,20 @@ if generate_button:
                         for row in range(16, 61):
                             part_cell = ws[f'A{row}']
                             if part_cell.value and str(part_cell.value).strip() == part_num:
-                                ws[f'D{row}'] = qty
+                                safe_set_cell_value(ws, f'D{row}', qty)
                                 found = True
                                 break
                         
                         # If not found, add to new row
                         if not found:
                             current_row += 1
-                            ws[f'A{current_row}'] = part_num
-                            ws[f'D{current_row}'] = qty
+                            safe_set_cell_value(ws, f'A{current_row}', part_num)
+                            safe_set_cell_value(ws, f'D{current_row}', qty)
                             
                             # Add description if available (custom)
                             if 'custom_descriptions' in st.session_state and part_num in st.session_state.custom_descriptions:
                                 # If there's a column for description in template
-                                desc_cell = ws[f'B{current_row}']
-                                if desc_cell and isinstance(desc_cell.value, str) or desc_cell.value is None:
-                                    ws[f'B{current_row}'] = st.session_state.custom_descriptions[part_num].get('description', '')
+                                safe_set_cell_value(ws, f'B{current_row}', st.session_state.custom_descriptions[part_num].get('description', ''))
                 
                 # 3. Add Additional Parts from Material DB (not selected manually)
                 if selected_plaid in material_db.index:
@@ -629,8 +654,8 @@ if generate_button:
                             val = material_db.loc[selected_plaid, col]
                             if pd.notna(val) and str(val).strip() != '' and str(val) != '0':
                                 current_row += 1
-                                ws[f'A{current_row}'] = col
-                                ws[f'D{current_row}'] = safe_int_convert(val, 0, 9999)
+                                safe_set_cell_value(ws, f'A{current_row}', col)
+                                safe_set_cell_value(ws, f'D{current_row}', safe_int_convert(val, 0, 9999))
                 
                 # 4. Inject Signature Image
                 if uploaded_file:
@@ -643,7 +668,7 @@ if generate_button:
                                 target_cell = merged_range.start_cell.coordinate
                                 break
                         
-                        ws[target_cell] = ""
+                        safe_set_cell_value(ws, target_cell, "")
                         
                         img = ExcelImage(uploaded_file)
                         img.width = 120
