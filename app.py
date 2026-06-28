@@ -13,15 +13,19 @@ st.title("🏗️ Automated MRF Generator with Parts Selection")
 @st.cache_data
 def load_material_data():
     """Load material database from CSV"""
-    mat_df = pd.read_csv("eul_material_list.csv", header=1, encoding='latin1', engine='python', on_bad_lines='skip', index_col=0)
-    master_df = pd.read_csv("GLOBE SITE MASTERLIST.csv", encoding='latin1', engine='python', on_bad_lines='skip')
-    master_df.rename(columns={master_df.columns[0]: 'PLAID'}, inplace=True)
-    master_df.set_index('PLAID', inplace=True)
-    return mat_df.join(master_df[['SITE', 'SITE_ADD']], how='left')
+    try:
+        mat_df = pd.read_csv("eul_material_list.csv", header=1, encoding='latin1', engine='python', on_bad_lines='skip', index_col=0)
+        master_df = pd.read_csv("GLOBE SITE MASTERLIST.csv", encoding='latin1', engine='python', on_bad_lines='skip')
+        master_df.rename(columns={master_df.columns[0]: 'PLAID'}, inplace=True)
+        master_df.set_index('PLAID', inplace=True)
+        return mat_df.join(master_df[['SITE', 'SITE_ADD']], how='left')
+    except Exception as e:
+        st.error(f"Error loading material data: {e}")
+        return pd.DataFrame()
 
 @st.cache_data
 def load_parts_database():
-    """Load parts database from Excel file with PART NUMBER and DESCRIPTION columns"""
+    """Load parts database from Excel file with PART NUMBER, DESCRIPTION, and CATEGORY columns"""
     try:
         # Check if file exists
         if os.path.exists("PartsDatabase.xlsx"):
@@ -54,6 +58,15 @@ def load_parts_database():
             elif 'PART_NAME' in parts_df.columns:
                 column_mapping['PART_NAME'] = 'Part_Name'
             
+            # Look for CATEGORY column
+            cat_cols = [col for col in parts_df.columns if 'CATEGORY' in col.upper() or 'CAT' in col.upper()]
+            if cat_cols:
+                column_mapping[cat_cols[0]] = 'Category'
+            elif 'CATEGORY' in parts_df.columns:
+                column_mapping['CATEGORY'] = 'Category'
+            elif 'CAT' in parts_df.columns:
+                column_mapping['CAT'] = 'Category'
+            
             # Rename columns if mapping found
             if column_mapping:
                 parts_df.rename(columns=column_mapping, inplace=True)
@@ -70,6 +83,9 @@ def load_parts_database():
             parts_df = parts_df[parts_df['Part_Number'].notna()]
             parts_df['Part_Number'] = parts_df['Part_Number'].astype(str).str.strip()
             parts_df = parts_df[parts_df['Part_Number'] != '']
+            
+            # Fill any missing categories with 'General'
+            parts_df['Category'] = parts_df['Category'].fillna('General')
             
             return parts_df
         else:
@@ -93,6 +109,23 @@ def load_site_masterlist():
     except Exception as e:
         st.error(f"Error loading site masterlist: {e}")
         return pd.DataFrame()
+
+# Helper function to safely convert to int
+def safe_int_convert(value):
+    """Safely convert value to int, return 0 if conversion fails"""
+    try:
+        if pd.isna(value):
+            return 0
+        if isinstance(value, (int, float)):
+            return int(value)
+        if isinstance(value, str):
+            # Remove any non-numeric characters except decimal point
+            cleaned = ''.join(c for c in value if c.isdigit() or c == '.')
+            if cleaned:
+                return int(float(cleaned))
+        return 0
+    except:
+        return 0
 
 # --- MAIN APPLICATION ---
 # Load all data
@@ -149,11 +182,28 @@ st.header("🔧 Parts Selection and Quantities")
 
 # Display parts database info
 if not parts_db.empty:
-    st.info(f"📊 Loaded {len(parts_db)} parts from PartsDatabase.xlsx")
+    # Show category statistics
+    if 'Category' in parts_db.columns:
+        category_counts = parts_db['Category'].value_counts()
+        st.info(f"📊 Loaded {len(parts_db)} parts from PartsDatabase.xlsx across {len(category_counts)} categories")
+        
+        # Show category distribution in expander
+        with st.expander("📊 Category Distribution"):
+            col_cat1, col_cat2 = st.columns(2)
+            with col_cat1:
+                st.dataframe(category_counts.reset_index().rename(columns={'index': 'Category', 'Category': 'Count'}), 
+                           use_container_width=True, hide_index=True)
+            with col_cat2:
+                st.bar_chart(category_counts)
+    else:
+        st.info(f"📊 Loaded {len(parts_db)} parts from PartsDatabase.xlsx")
     
     # Preview first few rows
     with st.expander("📋 Preview Parts Database"):
-        st.dataframe(parts_db[['Part_Number', 'Part_Name', 'Category']].head(10), use_container_width=True)
+        preview_cols = ['Part_Number', 'Part_Name']
+        if 'Category' in parts_db.columns:
+            preview_cols.append('Category')
+        st.dataframe(parts_db[preview_cols].head(10), use_container_width=True)
         if len(parts_db) > 10:
             st.caption(f"... and {len(parts_db) - 10} more parts")
 else:
@@ -184,6 +234,7 @@ with tab1:
                     filtered_parts = parts_db
             else:
                 filtered_parts = parts_db
+                st.info("No category column found. Showing all parts.")
 
         with col_parts2:
             # Search functionality
@@ -197,6 +248,7 @@ with tab1:
         # Display parts with quantity selection
         if not filtered_parts.empty:
             st.subheader("📦 Select Parts and Specify Quantities")
+            st.caption(f"Showing {len(filtered_parts)} parts")
             
             # Check if we have existing quantities from material_db
             existing_parts = {}
@@ -205,20 +257,22 @@ with tab1:
                     if col not in ['SITE', 'SITE_ADD']:
                         val = material_db.loc[selected_plaid, col]
                         if pd.notna(val) and str(val).strip() != '' and str(val) != '0':
-                            existing_parts[col] = val
+                            existing_parts[col] = safe_int_convert(val)
             
             # Create selection table with better layout
             st.markdown("### Select parts and enter quantities")
             
             # Use columns for better layout
-            col_labels = st.columns([2, 3, 1, 1.5])
+            col_labels = st.columns([2, 3, 1, 1, 1.5])
             with col_labels[0]:
                 st.write("**Part Number**")
             with col_labels[1]:
                 st.write("**Description**")
             with col_labels[2]:
-                st.write("**Unit**")
+                st.write("**Category**")
             with col_labels[3]:
+                st.write("**Unit**")
+            with col_labels[4]:
                 st.write("**Quantity**")
             
             st.divider()
@@ -228,7 +282,7 @@ with tab1:
                 if pd.isna(part_num) or part_num == 'nan' or part_num == '':
                     continue
                     
-                cols = st.columns([2, 3, 1, 1.5])
+                cols = st.columns([2, 3, 1, 1, 1.5])
                 
                 with cols[0]:
                     st.code(part_num, language=None)
@@ -238,23 +292,37 @@ with tab1:
                     st.write(part_name)
                 
                 with cols[2]:
+                    category = str(row.get('Category', 'General'))
+                    st.write(category)
+                
+                with cols[3]:
                     unit = str(row.get('Unit', 'pcs'))
                     st.write(unit)
                 
-                with cols[3]:
-                    default_qty = existing_parts.get(part_num, 0)
-                    if default_qty == 0 and 'Standard_Qty' in row:
-                        default_qty = int(row['Standard_Qty']) if pd.notna(row['Standard_Qty']) else 0
+                with cols[4]:
+                    # Safely get default quantity
+                    default_qty = 0
                     
-                    # Check if already in session state
+                    # Check existing parts from material_db
+                    if part_num in existing_parts:
+                        default_qty = existing_parts[part_num]
+                    
+                    # Check Standard_Qty if no existing quantity
+                    if default_qty == 0 and 'Standard_Qty' in row:
+                        default_qty = safe_int_convert(row['Standard_Qty'])
+                    
+                    # Check if already in session state (user's selection)
                     if part_num in st.session_state.selected_parts:
                         default_qty = st.session_state.selected_parts[part_num]
+                    
+                    # Ensure default_qty is an integer
+                    default_qty = safe_int_convert(default_qty)
                     
                     qty = st.number_input(
                         f"qty_{part_num}",
                         min_value=0,
                         max_value=9999,
-                        value=int(default_qty) if default_qty > 0 else 0,
+                        value=default_qty,
                         step=1,
                         key=f"db_qty_{part_num}",
                         label_visibility="collapsed"
@@ -281,6 +349,7 @@ with tab2:
     with col_custom1:
         custom_part_num = st.text_input("Part Number", placeholder="e.g., CUSTOM-001", key="custom_part_num")
         custom_description = st.text_input("Description", placeholder="e.g., Special Cable Assembly", key="custom_desc")
+        custom_category = st.text_input("Category (optional)", placeholder="e.g., Accessories", key="custom_category")
     
     with col_custom2:
         custom_unit = st.selectbox("Unit", ["pcs", "m", "kg", "L", "box", "set", "roll", "pair"], key="custom_unit")
@@ -294,12 +363,13 @@ with tab2:
                 # Add to selected parts
                 st.session_state.selected_parts[custom_part_num] = custom_qty
                 
-                # Also store description for display
+                # Also store description and category for display
                 if 'custom_descriptions' not in st.session_state:
                     st.session_state.custom_descriptions = {}
                 st.session_state.custom_descriptions[custom_part_num] = {
                     'description': custom_description,
-                    'unit': custom_unit
+                    'unit': custom_unit,
+                    'category': custom_category if custom_category else 'Custom'
                 }
                 
                 st.success(f"✅ Added {custom_part_num} - {custom_description} (Qty: {custom_qty})")
@@ -307,20 +377,22 @@ with tab2:
                 # Clear inputs
                 st.session_state.custom_part_num = ""
                 st.session_state.custom_desc = ""
+                st.session_state.custom_category = ""
                 st.session_state.custom_qty = 1
                 
                 st.rerun()
             else:
-                st.error("❌ Please fill in all fields (Part Number, Description, and Quantity)")
+                st.error("❌ Please fill in all required fields (Part Number, Description, and Quantity)")
     
     # Quick add multiple materials
     with st.expander("📋 Add Multiple Materials at Once"):
-        st.caption("Enter multiple materials in CSV format: PartNumber,Description,Quantity,Unit")
-        st.caption("Example: CBL-001,Fiber Cable,5,m")
+        st.caption("Enter multiple materials in CSV format: PartNumber,Description,Category,Quantity,Unit")
+        st.caption("Example: CBL-001,Fiber Cable,Cables,5,m")
+        st.caption("Note: Category is optional")
         
         multi_input = st.text_area(
             "Enter materials (one per line)",
-            placeholder="CBL-001,Fiber Optic Cable,10,m\nBRK-002,Mounting Bracket,5,pcs\nPSU-003,Power Supply,2,pcs",
+            placeholder="CBL-001,Fiber Optic Cable,Cables,10,m\nBRK-002,Mounting Bracket,Hardware,5,pcs\nPSU-003,Power Supply,Electronics,2,pcs",
             height=150
         )
         
@@ -334,8 +406,23 @@ with tab2:
                         part_num = parts[0]
                         desc = parts[1]
                         try:
-                            qty = int(parts[2])
-                            unit = parts[3] if len(parts) > 3 else 'pcs'
+                            # Check if category is provided (4th field) or quantity is 3rd
+                            if len(parts) >= 4:
+                                # Try to parse as PartNum,Desc,Category,Qty,Unit
+                                try:
+                                    qty = int(parts[3])
+                                    category = parts[2]
+                                    unit = parts[4] if len(parts) > 4 else 'pcs'
+                                except ValueError:
+                                    # If 3rd field is not a number, treat as category
+                                    category = parts[2]
+                                    qty = int(parts[3])
+                                    unit = parts[4] if len(parts) > 4 else 'pcs'
+                            else:
+                                # PartNum,Desc,Qty,Unit
+                                qty = int(parts[2])
+                                category = 'Custom'
+                                unit = parts[3] if len(parts) > 3 else 'pcs'
                             
                             if part_num and desc and qty > 0:
                                 st.session_state.selected_parts[part_num] = qty
@@ -343,13 +430,14 @@ with tab2:
                                     st.session_state.custom_descriptions = {}
                                 st.session_state.custom_descriptions[part_num] = {
                                     'description': desc,
-                                    'unit': unit
+                                    'unit': unit,
+                                    'category': category
                                 }
                                 added_count += 1
-                        except ValueError:
-                            st.warning(f"Skipping invalid line: {line}")
+                        except (ValueError, IndexError) as e:
+                            st.warning(f"Skipping invalid line: {line} - {str(e)}")
                     else:
-                        st.warning(f"Skipping invalid format: {line}")
+                        st.warning(f"Skipping invalid format: {line} - needs at least PartNumber, Description, Quantity")
                 
                 if added_count > 0:
                     st.success(f"✅ Added {added_count} custom materials successfully!")
@@ -371,6 +459,7 @@ if st.session_state.selected_parts:
                 summary_data.append({
                     'Part Number': part_num,
                     'Description': part_row.get('Part_Name', ''),
+                    'Category': part_row.get('Category', 'General'),
                     'Quantity': qty,
                     'Unit': part_row.get('Unit', 'pcs'),
                     'Source': 'Database'
@@ -383,6 +472,7 @@ if st.session_state.selected_parts:
             summary_data.append({
                 'Part Number': part_num,
                 'Description': custom_info.get('description', ''),
+                'Category': custom_info.get('category', 'Custom'),
                 'Quantity': qty,
                 'Unit': custom_info.get('unit', 'pcs'),
                 'Source': 'Custom'
@@ -392,6 +482,7 @@ if st.session_state.selected_parts:
             summary_data.append({
                 'Part Number': part_num,
                 'Description': 'Custom Material',
+                'Category': 'Custom',
                 'Quantity': qty,
                 'Unit': 'pcs',
                 'Source': 'Custom'
@@ -402,7 +493,7 @@ if st.session_state.selected_parts:
         st.dataframe(summary_df, use_container_width=True, hide_index=True)
         
         # Statistics and actions
-        col_stat1, col_stat2, col_stat3 = st.columns([1, 1, 1])
+        col_stat1, col_stat2, col_stat3, col_stat4 = st.columns([1, 1, 1, 1])
         with col_stat1:
             total_parts = len(st.session_state.selected_parts)
             total_qty = sum(st.session_state.selected_parts.values())
@@ -414,6 +505,12 @@ if st.session_state.selected_parts:
             st.info(f"📊 {db_count} from database, {custom_count} custom")
         
         with col_stat3:
+            # Show category breakdown
+            if 'Category' in summary_df.columns:
+                categories = summary_df['Category'].value_counts()
+                st.info(f"📂 {len(categories)} categories")
+        
+        with col_stat4:
             if st.button("🗑️ Clear All Selections", use_container_width=True):
                 st.session_state.selected_parts = {}
                 if 'custom_descriptions' in st.session_state:
@@ -488,6 +585,9 @@ if generate_button:
                 # Add selected parts (both from database and custom)
                 for part_num, qty in st.session_state.selected_parts.items():
                     if qty > 0:
+                        # Ensure qty is integer
+                        qty = safe_int_convert(qty)
+                        
                         # Check if part exists in template (rows 16-60)
                         found = False
                         for row in range(16, 61):
@@ -518,7 +618,7 @@ if generate_button:
                             if pd.notna(val) and str(val).strip() != '' and str(val) != '0':
                                 current_row += 1
                                 ws[f'A{current_row}'] = col
-                                ws[f'D{current_row}'] = val
+                                ws[f'D{current_row}'] = safe_int_convert(val)
                 
                 # 4. Inject Signature Image
                 if uploaded_file:
@@ -562,5 +662,5 @@ if generate_button:
 
 # --- FOOTER ---
 st.divider()
-st.caption("ℹ️ **PartsDatabase.xlsx** should have columns: **PART NUMBER** and **DESCRIPTION** (case-insensitive)")
-st.caption("📌 You can add custom materials not in the database using the 'Add Custom Materials' tab")
+st.caption("ℹ️ **PartsDatabase.xlsx** should have columns: **PART NUMBER**, **DESCRIPTION**, and **CATEGORY**")
+st.caption("📌 Category column helps organize parts. You can also add custom materials not in the database.")
